@@ -1,0 +1,8 @@
+<IfModule mod_ssl.c>
+<VirtualHost *:443>
+  SSLEngine On
+  SSLCertificateFile /etc/ssl/certs/ssl-cert-snakeoil.pem
+  SSLCertificateKeyFile /etc/ssl/private/ssl-cert-snakeoil.key 
+  {% include "common-wordpress-apache-site.conf.j2" %}
+</VirtualHost>
+</IfModule>

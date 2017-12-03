@@ -1,0 +1,277 @@
+---
+
+- hosts: all
+  become: true
+  become_method: sudo
+  become_user: root
+
+## VARS ###########################
+
+  vars:
+
+    # deploy type vars
+ 
+    fresh_installation: True   # True: you want a fresh installation of wordpress
+    deploy_existing_app: False  # True: you want to to deploy an existing wordpress app
+    # note: fresh_installation and deploy_existing_app cannot be both True, they can be both False (do not change existing db and wp files)
+    
+    force_installation: False   # True: deploy operations will overwrite existing db and wp files even if they already exist
+    
+    # if fresh_installation: True
+    fresh_installation_wp_version: latest
+    fresh_installation_wp_download_url: "https://wordpress.org/wordpress-{{ wp_version | default('latest') }}.tar.gz"
+
+    # if deploy_existing_app: True
+    deploy_existing_app_archive: sito2/wp-files.bz2 #note: the dir name inside this archive MUST be the same as wp_site_name
+    deploy_existing_app_db_dump_file: sito2/dumpdb.sql.bz2
+
+    # wp vars
+    wp_site_name: sito1
+    wp_install_dir: "/var/www/html/{{ wp_site_name }}"
+
+    # db vars
+    db_root_pwd: root
+    db_wp_name: "{{ wp_site_name }}"
+    db_wp_user: "{{ wp_site_name }}-user"
+    db_wp_pwd: dpwppassword
+
+    # apache vars
+    apache_server_admin: admin@sito1.it
+    apache_server_name: sito1.it
+    htpasswd_user: admin
+    htpasswd_pwd: admin
+
+## TASKS ###########################
+
+  tasks:
+
+  - name: check and fail if fresh_installation and deploy_existing_app are both True
+    fail:
+      msg: "deploy_existing_app and fresh_installation cannot be both True!"
+    when: fresh_installation == True and deploy_existing_app == True
+
+  - name: install required packages
+    apt:
+      name: "{{ item }}"
+      state: present
+      update_cache: yes
+    with_items: [ python-mysqldb, apache2, mysql-server, php5-mysql, php5, libapache2-mod-php5, php5-mcrypt, php5-cgi, php5-cli, php5-common, php5-curl, php5-dbg, php5-dev, php5-gd, libssh2-php, apache2-utils, python-passlib ]
+    tags: packages
+
+  ## DB PREPARATION ################
+
+  - name: set root user password
+    mysql_user:
+      name: root
+      password: "{{ db_root_pwd }}"
+      check_implicit_admin: yes
+      login_user: root
+      login_password: "{{ db_root_pwd }}"
+    tags: db
+
+  - name: ensure wp db presence
+    mysql_db:
+      name: "{{ db_wp_name }}"
+      state: present
+      login_user: root
+      login_password: "{{ db_root_pwd }}"
+    register: wp_db_presence
+    tags: db
+
+  - block:
+
+    - name: copy db dumpfile to restore (if deploy_existing_app)
+      copy:
+        src: "{{ deploy_existing_app_db_dump_file }}"
+        dest: /tmp
+
+    - name: restore db dumpfile (if deploy_existing_app)
+      mysql_db:
+        name: "{{ db_wp_name }}"
+        state: import
+        target: "/tmp/{{ deploy_existing_app_db_dump_file | basename }}"
+        login_user: root
+        login_password: "{{ db_root_pwd }}"
+
+    - name: clean imported dumpfile (if deploy_existing_app)
+      file:
+        path: "/tmp/{{ deploy_existing_app_db_dump_file | basename }}"
+        state: absent
+
+    when: deploy_existing_app == True and (wp_db_presence.changed == True or force_installation == True)
+    tags: db
+
+  - block:
+
+    - name: delete existing wp db (if fresh_installation)
+      mysql_db:
+        name: "{{ db_wp_name }}"
+        state: absent
+        login_user: root
+        login_password: "{{ db_root_pwd }}"
+
+    - name: create wp db (if fresh_installation)
+      mysql_db:
+        name: "{{ db_wp_name }}"
+        state: present
+        login_user: root
+        login_password: "{{ db_root_pwd }}"
+    
+    when: fresh_installation == True and wp_db_presence.changed == False and force_installation == True
+    tags: db
+
+  - name: ensure wordpress database user
+    mysql_user:
+      name: "{{ db_wp_user }}"
+      state: present
+      password: "{{ db_wp_pwd }}"
+      priv: "{{ db_wp_name }}.*:ALL"
+      append_privs: yes
+      login_user: root
+      login_password: "{{ db_root_pwd }}"
+    tags: db
+
+  ## WP FILES PREPARATION ################
+  
+  - name: check if wordpress dir is present
+    stat:
+      path: "{{ wp_install_dir }}"
+    register: wordpress_dir
+    tags: wp
+
+  - block:
+
+    - name: wipe current wordpress dir (if deploy_existing_app)
+      file:
+        path: "{{ wp_install_dir }}"
+        state: absent    
+
+    - name: unarchive wordpress files archive (if deploy_existing_app)
+      unarchive:
+        src: "{{ deploy_existing_app_archive }}"
+        dest: "{{ wp_install_dir | dirname }}"
+
+    when: deploy_existing_app == True and (wordpress_dir.stat.exists == False or force_installation == True)
+    tags: wp
+
+  - block:
+
+    - name: wipe current wordpress dir (if fresh_installation)
+      file:
+        path: "{{ wp_install_dir }}"
+        state: absent
+
+    - name: download and uncompress wordpress files (if fresh_installation)
+      unarchive: 
+        src: "{{ fresh_installation_wp_download_url }}"
+        dest: "{{ wp_install_dir | dirname }}"
+        remote_src: yes
+
+    - name: rename wordpress dir (if fresh_installation)
+      command: "mv {{ wp_install_dir | dirname }}/wordpress {{ wp_install_dir }}"
+
+    - name: create wordpress config file (if fresh_installation)
+      command: "cp {{ wp_install_dir }}/wp-config-sample.php {{ wp_install_dir }}/wp-config.php"
+
+    - name: get fresh wordpress salts (if fresh_installation)
+      uri:
+        return_content: yes
+        url: https://api.wordpress.org/secret-key/1.1/salt/
+      register: wp_salts
+  
+    - name: define config vars in wp.config.php (if fresh_installation)
+      replace: 
+        destfile: "{{ wp_install_dir }}/wp-config.php"
+        regexp: ".*'{{ item.var }}'.*"
+        replace: "{{ item.newdef }}"
+      with_items:
+        - { var: DB_NAME , newdef: "define('DB_NAME', '{{ db_wp_name }}');" }
+        - { var: DB_USER , newdef: "define('DB_USER', '{{ db_wp_user }}');" }
+        - { var: DB_PASSWORD , newdef: "define('DB_PASSWORD', '{{ db_wp_pwd }}');" }
+        - { var: AUTH_KEY, newdef: "" }
+        - { var: SECURE_AUTH_KEY, newdef: "" }
+        - { var: LOGGED_IN_KEY, newdef: "" }
+        - { var: NONCE_KEY, newdef: "" }
+        - { var: AUTH_SALT, newdef: "" }
+        - { var: SECURE_AUTH_SALT, newdef: "" }
+        - { var: LOGGED_IN_SALT, newdef: "" }
+        - { var: NONCE_SALT, newdef: "{{ wp_salts.content }}"  }
+
+    when: fresh_installation == True and (wordpress_dir.stat.exists == False or force_installation == True)
+    tags: wp
+
+  - name: set permissions, group and owner of wordpress files
+    file:
+      path: "{{ wp_install_dir }}"
+      owner: www-data
+      group: www-data
+      state: directory
+      recurse: yes
+      mode: "u=rw,g=r,o=r"
+    tags: wp
+
+  - name: ensure directories are executable
+    command: find "{{ wp_install_dir }}" -type d -exec chmod "u=rwx,g=r,o=r" {} \;
+    tags: wp
+
+  ## APACHE PREPARATION ################
+  
+  - name: enable apache modules
+    apache2_module:
+      name: "{{ item }}"
+      state: present
+    with_items:
+      - rewrite
+      - ssl
+    notify:
+    - restart apache
+    tags: apache
+
+  - name: create htpasswd credentials for wp-admin section
+    htpasswd:
+      path: "/etc/apache2/{{ wp_site_name }}-htpasswd"
+      name: "{{ htpasswd_user }}"
+      password: "{{ htpasswd_pwd }}"
+    tags: apache
+
+  - name: upload apache site files
+    template:
+      src:  "{{ item.src }}"
+      dest: "/etc/apache2/sites-available/{{ item.dest }}"
+    with_items:
+      - { src: wordpress.conf.j2 , dest: "{{ wp_site_name }}.conf"  }
+      - { src: wordpress-ssl.conf.j2 , dest: "{{ wp_site_name}}-ssl.conf" }
+    notify:
+    - reload apache
+    tags: apache
+
+  - name: a2ensite worpress configs and sites
+    file:
+      src: "/etc/apache2/sites-available/{{ item }}"
+      dest: "/etc/apache2/sites-enabled/{{ item }}"
+      state: link
+    with_items:
+      - "{{ wp_site_name }}.conf"
+      - "{{ wp_site_name }}-ssl.conf"
+    notify:
+    - reload apache
+    tags: apache
+
+  - name: disable apache default site
+    file:
+      path: /etc/apache2/sites-enabled/000-default.conf
+      state: absent
+    notify:
+    - reload apache
+    tags: apache
+
+## HANDLERS ###########################
+
+  handlers:
+  
+  - name: restart apache
+    service: name=apache2 state=restarted
+
+  - name: reload apache
+    service: name=apache2 state=reloaded
+

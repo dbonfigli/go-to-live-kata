@@ -1,0 +1,58 @@
+---
+
+- hosts: all
+  become: true
+  become_method: sudo
+  become_user: root
+
+## VARS ###########################
+
+  vars:
+  
+    wp_site_name: sito3
+    wp_install_dir: "/var/www/html/{{ wp_site_name }}"
+    
+    db_root_pwd: root
+    db_wp_name: "{{ wp_site_name }}"
+
+    bk_dest: "{{ wp_site_name }}"
+
+## TASKS #########################
+
+  tasks:
+
+  - name: archive wp files
+    archive:
+      path: "{{ wp_install_dir }}"
+      dest: /tmp/wp-files.bz2
+      format: bz2
+
+  - name: fetch wp files archive
+    fetch:
+      src: /tmp/wp-files.bz2
+      dest: "{{ bk_dest }}/wp-files.bz2"
+      flat: yes
+
+  - name: backup wp db
+    mysql_db:
+      name: "{{ db_wp_name }}"
+      state: dump
+      target: /tmp/dumpdb.sql.bz2
+      login_user: root
+      login_password: "{{ db_root_pwd }}"
+
+  - name: fetch wp db dump
+    fetch:
+      src: /tmp/dumpdb.sql.bz2
+      dest: "{{ bk_dest }}/dumpdb.sql.bz2"
+      flat: yes
+
+  - name: clean imported files 
+    file:
+      path: "{{ item }}"
+      state: absent
+    with_items:
+      - /tmp/wp-files.bz2
+      - /tmp/dumpdb.sql.bz2
+
+

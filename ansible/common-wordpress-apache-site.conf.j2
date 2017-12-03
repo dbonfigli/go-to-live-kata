@@ -1,0 +1,35 @@
+
+  ServerName {{ apache_server_name }}
+  DocumentRoot {{ wp_install_dir }}
+  ErrorLog ${APACHE_LOG_DIR}/error.log
+  CustomLog ${APACHE_LOG_DIR}/access.log combined
+  ServerAdmin {{ apache_server_admin }}
+
+  <Directory "{{ wp_install_dir }}">
+    Options SymLinksIfOwnerMatch
+    AllowOverride All
+    Require all granted
+    <ifModule mod_rewrite.c>
+      RewriteEngine On
+      #enhance wordpress security as in https://codex.wordpress.org/Hardening_WordPress
+      RewriteBase /
+      RewriteRule ^wp-admin/includes/ - [F,L]
+      RewriteRule !^wp-includes/ - [S=3]
+      RewriteRule ^wp-includes/[^/]+\.php$ - [F,L]
+      RewriteRule ^wp-includes/js/tinymce/langs/.+\.php - [F,L]
+      RewriteRule ^wp-includes/theme-compat/ - [F,L]
+    </ifModule>
+  </Directory>
+
+  <Directory "{{ wp_install_dir }}/wp-admin">  
+    AuthType Basic
+    AuthName "Authentication Required"
+    AuthUserFile "/etc/apache2/{{ wp_site_name }}-htpasswd"
+    Require valid-user
+  </Directory>
+
+  <Files "admin-ajax.php">
+    Require all granted
+  </Files>
+
+
