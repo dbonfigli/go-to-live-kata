@@ -11,11 +11,15 @@ First, check the variables in ansible/deploy.yml, then deploy a new machine with
 
 Run again the deploy with: "vagrant provision" or (at path level):
 
+```
 PYTHONUNBUFFERED=1 ANSIBLE_FORCE_COLOR=true ANSIBLE_HOST_KEY_CHECKING=false ANSIBLE_SSH_ARGS='-o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes -o ControlMaster=auto -o ControlPersist=60s' ansible-playbook --connection=ssh --timeout=30 --limit="default" --inventory-file=.vagrant/provisioners/ansible/inventory -v ansible/deploy.yml
+```
 
 Backup an installation with the playbook backup.yml, change the required vars (bk_dest in particular) and run:
 
+```
 PYTHONUNBUFFERED=1 ANSIBLE_FORCE_COLOR=true ANSIBLE_HOST_KEY_CHECKING=false ANSIBLE_SSH_ARGS='-o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes -o ControlMaster=auto -o ControlPersist=60s' ansible-playbook --connection=ssh --timeout=30 --limit="default" --inventory-file=.vagrant/provisioners/ansible/inventory -v ansible/backup.yml
+```
 
 ## Details
 
